@@ -2,6 +2,12 @@
 
 import sys
 
+# branch table key values
+HLT = 0b00000001
+LDI = 0b10000010
+PRN = 0b01000111
+MUL = 0b10100010
+
 
 class CPU:
     """Main CPU class."""
@@ -12,27 +18,46 @@ class CPU:
         self.reg = [0] * 8
         self.pc = 0
         self.running = False
+        # branch table
+        self.branchtable = {}
+        self.branchtable[HLT] = self.handle_hlt
+        self.branchtable[LDI] = self.handle_ldi
+        self.branchtable[PRN] = self.handle_pri
+        self.branchtable[MUL] = self.handle_mul
 
     def load(self):
         """Load a program into memory."""
+        # Needs 2 file names (comp.py & program file name)...if not, print error
+        if len(sys.argv) != 2:
+            print("usage: comp.py filename")
+            sys.exit(1)
 
-        address = 0
+        try:
+            address = 0
 
-        # For now, we've just hardcoded a program:
+            with open(sys.argv[1]) as f:
+                # sanitize data from file
+                for line in f:
+                    t = line.split('#')
+                    n = t[0].strip()
 
-        program = [
-            # From print8.ls8
-            0b10000010,  # LDI R0,8
-            0b00000000,
-            0b00001000,
-            0b01000111,  # PRN R0
-            0b00000000,
-            0b00000001,  # HLT
-        ]
+                    if n == '':
+                        continue
 
-        for instruction in program:
-            self.ram[address] = instruction
-            address += 1
+                    try:
+                        n = int(n, 2)
+                    except ValueError:
+                        print(f"Invalid number: {n}")
+                        sys.exit(1)
+
+                    # commit program data to memory
+                    self.ram[address] = n
+                    address += 1
+
+        # If program file name not found/valid, print error
+        except FileNotFoundError:
+            print(f"File not found: {sys.argv[1]}")
+            sys.exit(2)
 
     def alu(self, op, reg_a, reg_b):
         """ALU operations."""
@@ -40,6 +65,8 @@ class CPU:
         if op == "ADD":
             self.reg[reg_a] += self.reg[reg_b]
         # elif op == "SUB": etc
+        elif op == "MUL":
+            self.reg[reg_a] *= self.reg[reg_b]
         else:
             raise Exception("Unsupported ALU operation")
 
@@ -72,13 +99,24 @@ class CPU:
     def ram_write(self, MAR, MDR):
         self.ram[MAR] = MDR
 
+    # HLT INSTRUCTION: Halt CPU & exit emulator
+    def handle_hlt(self, a, b):
+        self.running = False
+
+    # LDI INSTRUCTION: Set value of register to an integer
+    def handle_ldi(self, operand_a, operand_b):
+        self.reg[operand_a] = operand_b
+
+    # PRN INSTRUCTION: print numeric value stored in given register
+    def handle_pri(self, operand_a, operand_b):
+        print(f"Value at register {operand_a}: {self.reg[operand_a]}")
+
+    # MUL INSTRUCITON: Multiply values in 2 registers together & store result in registerA
+    def handle_mul(self, reg_a, reg_b):
+        self.alu("MUL", reg_a, reg_b)
+
     def run(self):
         """Run the CPU."""
-        # Define instruction values per specs
-        HLT = 0b00000001
-        LDI = 0b10000010
-        PRN = 0b01000111
-
         # set running to True
         self.running = True
 
@@ -87,26 +125,15 @@ class CPU:
             # set instruction register
             ir = self.ram_read(self.pc)
 
-            # HLT INSTRUCTION: Halt CPU & exit emulator
-            if ir is HLT:
-                self.running = False
+            # find num of operands (use to dynamically set pc incrementation)
+            operand_count = (ir & 0b11000000) >> 6
+            increment_num = operand_count + 1
 
-            # LDI INSTRUCTION: Set value of register to an integer
-            elif ir is LDI:
-                # define register number
-                operand_a = self.ram_read(self.pc+1)
-                # define 8-bit immediate value
-                operand_b = self.ram_read(self.pc+2)
-                # update register
-                self.reg[operand_a] = operand_b
-                # increment pc
-                self.pc += 3
+            op_a = self.ram_read(self.pc+1)
+            op_b = self.ram_read(self.pc+2)
 
-            # PRN INSTRUCTION: print numeric value stored in given register
-            elif ir is PRN:
-                # define register number
-                operand_a = self.ram_read(self.pc+1)
-                # print the value
-                print(f"Value at {operand_a}: {self.reg[operand_a]}")
-                # increment pc
-                self.pc += 2
+            # use branchtable to perform proper program
+            self.branchtable[ir](op_a, op_b)
+
+            # increment pc
+            self.pc += increment_num
